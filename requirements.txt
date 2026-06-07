@@ -17,4 +17,6 @@ Flask
 Flask-Cors
 gdown
 from_root
+pymongo
+dotenv
 -e .
