@@ -5,6 +5,7 @@ __pycache__/
 
 abc.txt
 chest-deep-learning.zip
+artifacts
 
 # C extensions
 *.so

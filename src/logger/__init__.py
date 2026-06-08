@@ -39,8 +39,10 @@ def configure_logger():
     
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
+    logger.info("LOGGER INITIALIZED")
 
 configure_logger()
+
 # Suppress noisy third-party debug logs
 logging.getLogger("pymongo").setLevel(logging.WARNING)
 logging.getLogger("pymongo.topology").setLevel(logging.WARNING)
