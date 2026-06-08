@@ -19,4 +19,5 @@ gdown
 from_root
 pymongo
 dotenv
+boto3
 -e .

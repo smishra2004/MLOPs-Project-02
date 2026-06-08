@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+abc.txt
+chest-deep-learning.zip
+
 # C extensions
 *.so
 
