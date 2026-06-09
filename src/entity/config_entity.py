@@ -68,7 +68,7 @@ class DataTransformationConfig:
     """What the data transformation component NEEDS (inputs / settings)."""
  
     batch_size:  int = 32   # 32 is standard; reduce to 16 if GPU runs out of memory
-    num_workers: int = 4    # parallel data loading; set to 0 if on Windows
+    num_workers: int = 0    # parallel data loading; set to 0 if on Windows
  
 from dataclasses import dataclass
 import os

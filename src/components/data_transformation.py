@@ -161,7 +161,7 @@ class DataTransformation:
                 batch_size=self.data_transformation_config.batch_size,
                 sampler=sampler,           # replaces shuffle=True when using sampler
                 num_workers=self.data_transformation_config.num_workers,
-                pin_memory=True,           # speeds up CPU → GPU transfer
+                pin_memory=torch.cuda.is_available(),           # speeds up CPU → GPU transfer
             )
 
             test_loader = DataLoader(
@@ -169,7 +169,7 @@ class DataTransformation:
                 batch_size=self.data_transformation_config.batch_size,
                 shuffle=False,
                 num_workers=self.data_transformation_config.num_workers,
-                pin_memory=True,
+                pin_memory=torch.cuda.is_available(),
             )
 
             val_loader = DataLoader(
@@ -177,7 +177,7 @@ class DataTransformation:
                 batch_size=self.data_transformation_config.batch_size,
                 shuffle=False,
                 num_workers=self.data_transformation_config.num_workers,
-                pin_memory=True,
+                pin_memory=torch.cuda.is_available(),
             )
 
             logging.info(

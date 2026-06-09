@@ -245,8 +245,8 @@ class ModelTrainer:
                 epoch_time = time.time() - epoch_start
                 logging.info(
                     f"Epoch [{epoch + 1}/{self.model_trainer_config.num_epochs}]  "
-                    f"Train → Loss: {train_loss:.4f}  Acc: {train_acc:.4f}  |  "
-                    f"Val → Loss: {val_loss:.4f}  Acc: {val_acc:.4f}  "
+                    f"Train -> Loss: {train_loss:.4f}  Acc: {train_acc:.4f}  |  "
+                    f"Val -> Loss: {val_loss:.4f}  Acc: {val_acc:.4f}  "
                     f"[{epoch_time:.0f}s]"
                 )
 

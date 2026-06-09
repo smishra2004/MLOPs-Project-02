@@ -55,4 +55,6 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('s3transfer').setLevel(logging.WARNING)
 logging.getLogger("PIL").propagate = False
 logging.getLogger("PIL").setLevel(logging.CRITICAL)
+logging.getLogger("pydot").disabled = True
+logging.getLogger("pydot.core").disabled = True
     
