@@ -12,6 +12,7 @@ AWS_ACCESS_KEY_ID_ENV_KEY = "AWS_ACCESS_KEY_ID"
 AWS_SECRET_ACCESS_KEY_ENV_KEY = "AWS_SECRET_ACCESS_KEY"
 REGION_NAME = "us-east-1"
 S3_DATA_KEY = "chest-deep-learning.zip"
+S3_MODEL_KEY_PATH = "cnn_model.pkl"
 
 PIPELINE_NAME: str = ""
 ARTIFACT_DIR: str = "artifacts"
