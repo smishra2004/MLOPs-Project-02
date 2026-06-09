@@ -1,13 +1,12 @@
-print("DEMO STARTED")
-
+from multiprocessing import freeze_support
 from src.pipeline.training_pipeline import TrainPipeline
 
-print("PIPELINE IMPORTED")
 
-pipeline = TrainPipeline()
+def main():
+    pipeline = TrainPipeline()
+    pipeline.run_pipeline()
 
-print("PIPELINE CREATED")
 
-pipeline.run_pipeline()
-
-print("PIPELINE FINISHED")
+if __name__ == "__main__":
+    freeze_support()
+    main()

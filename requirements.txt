@@ -19,5 +19,10 @@ gdown
 from_root
 pymongo
 dotenv
+ipykernel
+torch 
+torchvision 
+torchaudio
 boto3
+mypy-boto3-s3
 -e .
