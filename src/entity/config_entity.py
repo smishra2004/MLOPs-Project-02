@@ -110,3 +110,17 @@ class ModelPusherConfig:
     # Same bucket and key as evaluator — pusher overwrites production model
     bucket_name       : str = S3_BUCKET_NAME
     s3_model_key_path : str = S3_MODEL_KEY_PATH
+
+@dataclass
+class ChestXrayPredictorConfig:
+    """
+    Mirrors: VehiclePredictorConfig
+ 
+    What the prediction pipeline NEEDS to load the model from S3.
+    Uses the same bucket + key that ModelPusher uploaded to.
+    """
+    model_bucket_name : str = S3_BUCKET_NAME   # same bucket as pusher
+    model_file_path   : str = S3_MODEL_KEY_PATH   # same key as pusher
+                                                   # e.g. 'cnn_model.pkl'
+ 
+ 
