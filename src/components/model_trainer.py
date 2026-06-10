@@ -3,36 +3,23 @@ import sys
 import copy
 import time
 
+import mlflow
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import models
-
-import mlflow
-import mlflow.pytorch
 
 from src.entity.config_entity import ModelTrainerConfig
 from src.entity.artifact_entity import DataTransformationArtifact, ModelTrainerArtifact
 from src.exception import MyException
 from src.logger import logging
 
-from dotenv import load_dotenv
-load_dotenv()
-
 
 class ModelTrainer:
     """
-    Trains a ResNet50 model (pretrained on ImageNet) for binary
-    classification: NORMAL vs PNEUMONIA.
-
-    Transfer learning strategy:
-      - Backbone (all ResNet50 layers) → frozen
-      - Custom head (Linear → ReLU → Dropout → Linear) → trainable only
-
-    Why freeze the backbone?
-      ResNet50 pretrained on ImageNet already knows edges, textures,
-      and shapes. With only 5216 training images, training the full
-      network would overfit. We only teach the head NORMAL vs PNEUMONIA.
+    Trains ResNet50 for NORMAL vs PNEUMONIA classification.
+    MLflow logs per-epoch metrics (loss, accuracy) during training.
+    DagsHub is the remote MLflow tracking server.
     """
 
     def __init__(
@@ -50,27 +37,14 @@ class ModelTrainer:
 
     # ──────────────────────────────────────────────────────────────────────────
     def build_model(self) -> nn.Module:
-        """
-        Loads pretrained ResNet50, freezes all backbone layers,
-        replaces the final FC layer with a 2-class head.
-
-        Architecture of the trainable head:
-            Linear(2048 → 256) → ReLU → Dropout(0.4) → Linear(256 → 2)
-
-        Dropout(0.4): regularisation — reduces overfitting on small dataset.
-        256 hidden units: enough capacity without being too large for CPU.
-        """
         try:
-            mlflow.pytorch.autolog(log_models=True, log_every_n_epoch=1)
             logging.info("Loading pretrained ResNet50.")
             model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
 
-            # Freeze all backbone layers
             for param in model.parameters():
                 param.requires_grad = False
 
-            # Replace final FC layer with custom 2-class head
-            in_features = model.fc.in_features   # 2048 for ResNet50
+            in_features = model.fc.in_features
             model.fc = nn.Sequential(
                 nn.Linear(in_features, 256),
                 nn.ReLU(),
@@ -101,22 +75,13 @@ class ModelTrainer:
         criterion: nn.Module,
         optimizer: optim.Optimizer,
     ) -> tuple[float, float]:
-        """
-        Runs one full pass over the training DataLoader.
-
-        Returns:
-            avg_loss (float): mean loss across all batches
-            accuracy (float): fraction of correct predictions
-        """
         try:
             model.train()
             running_loss = 0.0
             correct      = 0
             total        = 0
 
-            for batch_idx, (images, labels) in enumerate(
-                self.data_transformation_artifact.train_loader
-            ):
+            for images, labels in self.data_transformation_artifact.train_loader:
                 images = images.to(self.device)
                 labels = labels.to(self.device)
 
@@ -131,9 +96,7 @@ class ModelTrainer:
                 correct  += (preds == labels).sum().item()
                 total    += labels.size(0)
 
-            avg_loss = running_loss / total
-            accuracy = correct / total
-            return avg_loss, accuracy
+            return running_loss / total, correct / total
 
         except Exception as e:
             raise MyException(e, sys)
@@ -145,14 +108,6 @@ class ModelTrainer:
         loader: torch.utils.data.DataLoader,
         criterion: nn.Module,
     ) -> tuple[float, float]:
-        """
-        Evaluates the model on a given DataLoader (val or test).
-        No gradients computed — inference only.
-
-        Returns:
-            avg_loss (float): mean loss
-            accuracy (float): fraction of correct predictions
-        """
         try:
             model.eval()
             running_loss = 0.0
@@ -172,9 +127,7 @@ class ModelTrainer:
                     correct  += (preds == labels).sum().item()
                     total    += labels.size(0)
 
-            avg_loss = running_loss / total
-            accuracy = correct / total
-            return avg_loss, accuracy
+            return running_loss / total, correct / total
 
         except Exception as e:
             raise MyException(e, sys)
@@ -182,39 +135,48 @@ class ModelTrainer:
     # ──────────────────────────────────────────────────────────────────────────
     def train(self) -> tuple[nn.Module, dict]:
         """
-        Full training loop with:
-          - Weighted CrossEntropyLoss  : handles 2.89x class imbalance
-          - Adam optimiser             : only on trainable head params
-          - ReduceLROnPlateau          : halves LR if val loss stalls
-          - Early stopping             : stops if val loss doesn't improve
-                                         for `patience` epochs
-          - Best weight tracking       : always restores best val checkpoint
-
-        Returns:
-            model   : ResNet50 with best validation weights loaded
-            history : dict of per-epoch train/val loss and accuracy
+        Full training loop.
+        MLflow logs:
+          - hyperparameters once at the start (params)
+          - loss and accuracy after every epoch (metrics)
+        The run is NOT closed here — ModelEvaluation closes it
+        after logging final test metrics.
         """
         try:
             logging.info("Starting ResNet50 training.")
 
             model = self.build_model()
 
-            # Weighted loss — class_weights from DataTransformationArtifact
-            # Higher weight on NORMAL (minority) so misclassifying it costs more
             criterion = nn.CrossEntropyLoss(
                 weight=self.data_transformation_artifact.class_weights.to(self.device)
             )
-
-            # Adam on trainable params only (the head)
             optimizer = optim.Adam(
                 params=filter(lambda p: p.requires_grad, model.parameters()),
                 lr=self.model_trainer_config.learning_rate,
             )
-
-            # Reduce LR by 0.5 if val loss doesn't improve for 2 epochs
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer, mode='min', factor=0.5, patience=2
             )
+
+            # ── Log hyperparameters to MLflow ─────────────────────────────
+            # Called once — these are the settings used for this run
+            mlflow.log_params({
+                "model_name"    : "resnet50",
+                "num_epochs"    : self.model_trainer_config.num_epochs,
+                "learning_rate" : self.model_trainer_config.learning_rate,
+                "batch_size"    : self.data_transformation_artifact.train_loader.batch_size,  # ← reads from loader
+                "patience"      : self.model_trainer_config.patience,
+                "dropout"       : 0.4,
+                "optimizer"     : "Adam",
+                "loss_function" : "CrossEntropyLoss (weighted)",
+                "device"        : str(self.device),
+                "class_weight_normal"    : round(
+                    self.data_transformation_artifact.class_weights[0].item(), 4
+                ),
+                "class_weight_pneumonia" : round(
+                    self.data_transformation_artifact.class_weights[1].item(), 4
+                ),
+            })
 
             history = {
                 'train_loss': [],
@@ -230,18 +192,12 @@ class ModelTrainer:
             for epoch in range(self.model_trainer_config.num_epochs):
                 epoch_start = time.time()
 
-                # ── Train ────────────────────────────────────────────────
-                train_loss, train_acc = self.train_one_epoch(
-                    model, criterion, optimizer
-                )
-
-                # ── Validate ─────────────────────────────────────────────
-                val_loss, val_acc = self.evaluate(
+                train_loss, train_acc = self.train_one_epoch(model, criterion, optimizer)
+                val_loss, val_acc     = self.evaluate(
                     model,
                     self.data_transformation_artifact.val_loader,
                     criterion,
                 )
-
                 scheduler.step(val_loss)
 
                 history['train_loss'].append(train_loss)
@@ -250,12 +206,22 @@ class ModelTrainer:
                 history['val_acc'].append(val_acc)
 
                 epoch_time = time.time() - epoch_start
+
                 logging.info(
                     f"Epoch [{epoch + 1}/{self.model_trainer_config.num_epochs}]  "
                     f"Train -> Loss: {train_loss:.4f}  Acc: {train_acc:.4f}  |  "
                     f"Val -> Loss: {val_loss:.4f}  Acc: {val_acc:.4f}  "
                     f"[{epoch_time:.0f}s]"
                 )
+
+                # ── Log per-epoch metrics to MLflow ───────────────────────
+                # step=epoch so DagsHub plots them as a curve over time
+                mlflow.log_metrics({
+                    "train_loss" : round(train_loss, 4),
+                    "train_acc"  : round(train_acc,  4),
+                    "val_loss"   : round(val_loss,   4),
+                    "val_acc"    : round(val_acc,    4),
+                }, step=epoch)
 
                 # ── Best weight checkpoint ────────────────────────────────
                 if val_loss < best_val_loss:
@@ -277,11 +243,8 @@ class ModelTrainer:
                         )
                         break
 
-            # Restore best checkpoint before returning
             model.load_state_dict(best_weights)
-            logging.info(
-                f"Training complete. Best val loss: {best_val_loss:.4f}"
-            )
+            logging.info(f"Training complete. Best val loss: {best_val_loss:.4f}")
             return model, history
 
         except Exception as e:
@@ -289,29 +252,14 @@ class ModelTrainer:
 
     # ──────────────────────────────────────────────────────────────────────────
     def initiate_model_trainer(self) -> ModelTrainerArtifact:
-        """
-        Entry point for the model trainer component.
-        Mirrors: initiate_data_ingestion() / initiate_data_transformation()
-
-        Steps:
-          1. Train ResNet50 with best-weight tracking
-          2. Evaluate on test set
-          3. Save model weights to artifact path
-          4. Return ModelTrainerArtifact
-
-        Returns:
-            ModelTrainerArtifact: save path + test metrics + history
-        """
         try:
             logging.info(
                 "========== Entered initiate_model_trainer — ModelTrainer =========="
             )
 
-            # Step 1: Train
             model, history = self.train()
             logging.info("Training complete.")
 
-            # Step 2: Evaluate on test set
             criterion = nn.CrossEntropyLoss(
                 weight=self.data_transformation_artifact.class_weights.to(self.device)
             )
@@ -325,7 +273,6 @@ class ModelTrainer:
                 f"Accuracy: {test_acc:.4f}  Loss: {test_loss:.4f}"
             )
 
-            # Step 3: Save model weights
             os.makedirs(
                 os.path.dirname(self.model_trainer_config.model_save_path),
                 exist_ok=True,
@@ -338,7 +285,6 @@ class ModelTrainer:
                 f"Model saved to: {self.model_trainer_config.model_save_path}"
             )
 
-            # Step 4: Build and return artifact
             model_trainer_artifact = ModelTrainerArtifact(
                 model_save_path=self.model_trainer_config.model_save_path,
                 test_accuracy=test_acc,
