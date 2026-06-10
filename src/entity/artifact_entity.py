@@ -54,4 +54,3 @@ class ModelPusherArtifact:
     bucket_name   : str    # S3 bucket where model was pushed
     s3_model_path : str    # S3 key path of the pushed model
     is_pushed     : bool   # True if model was actually uploaded
- 
