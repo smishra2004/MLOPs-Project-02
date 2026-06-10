@@ -5,6 +5,7 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 from sklearn.metrics import roc_auc_score
+import mlflow
 
 from src.entity.config_entity import ModelEvaluationConfig
 from src.entity.artifact_entity import (
@@ -15,6 +16,9 @@ from src.entity.artifact_entity import (
 from src.entity.chest_xray_s3_estimator import ChestXrayEstimator
 from src.exception import MyException
 from src.logger import logging
+
+from dotenv import load_dotenv
+load_dotenv()
 
 
 @dataclass
@@ -202,6 +206,11 @@ class ModelEvaluation:
             # ── Step 5: Acceptance decision ───────────────────────────────
             is_model_accepted = trained_model_auc > best_model_auc
             difference        = trained_model_auc - best_model_auc
+            
+            mlflow.log_metric("trained_model_auc", trained_model_auc)
+            mlflow.log_metric("production_model_auc", best_model_auc)
+            mlflow.log_metric("auc_difference", difference)
+            mlflow.log_param("is_model_accepted", is_model_accepted)
 
             result = EvaluateModelResponse(
                 trained_model_auc=trained_model_auc,

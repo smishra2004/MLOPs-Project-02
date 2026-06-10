@@ -8,10 +8,16 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import models
 
+import mlflow
+import mlflow.pytorch
+
 from src.entity.config_entity import ModelTrainerConfig
 from src.entity.artifact_entity import DataTransformationArtifact, ModelTrainerArtifact
 from src.exception import MyException
 from src.logger import logging
+
+from dotenv import load_dotenv
+load_dotenv()
 
 
 class ModelTrainer:
@@ -55,6 +61,7 @@ class ModelTrainer:
         256 hidden units: enough capacity without being too large for CPU.
         """
         try:
+            mlflow.pytorch.autolog(log_models=True, log_every_n_epoch=1)
             logging.info("Loading pretrained ResNet50.")
             model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
 

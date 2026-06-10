@@ -1,4 +1,6 @@
 import sys
+import mlflow
+import dagshub
 from src.exception import MyException
 from src.logger import logging
 
@@ -8,6 +10,9 @@ from src.components.chest_xray_transforms import ChestXrayTransforms
 from src.components.model_trainer import ModelTrainer
 from src.components.model_evaluation import ModelEvaluation
 from src.components.model_pusher import ModelPusher
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from src.entity.config_entity import (DataIngestionConfig,
                                       DataTransformationConfig,
@@ -107,16 +112,25 @@ class TrainPipeline:
         """
         print("RUN_PIPELINE CALLED")
         try:
-            data_ingestion_artifact      = self.start_data_ingestion()
-            data_transformation_artifact = self.start_data_transformation(data_ingestion_artifact=data_ingestion_artifact)
-            model_trainer_artifact = self.start_model_trainer(data_transformation_artifact=data_transformation_artifact)
-            model_evaluation_artifact = self.start_model_evaluation(model_eval_config=self.model_evaluation_config,
-                                                                    data_transformation_artifact=data_transformation_artifact,
-                                                                    model_trainer_artifact=model_trainer_artifact)
-            if not model_evaluation_artifact.is_model_accepted:
-                logging.info(f"Model not accepted.")
-                return None
-            model_pusher_artifact = self.start_model_pusher(model_evaluation_artifact=model_evaluation_artifact)
+            dagshub.init(repo_owner='smishra2004', repo_name='MLOPs-Project-02', mlflow=True)
+            mlflow.set_tracking_uri("https://dagshub.com/smishra2004/MLOPs-Project-02.mlflow")
+            mlflow.set_experiment("chest-xray-detection-experiment")
+            
+            with mlflow.start_run() as run:
+                mlflow.set_tag("pipeline_status", "running")
+                data_ingestion_artifact      = self.start_data_ingestion()
+                data_transformation_artifact = self.start_data_transformation(data_ingestion_artifact=data_ingestion_artifact)
+                model_trainer_artifact = self.start_model_trainer(data_transformation_artifact=data_transformation_artifact)
+                model_evaluation_artifact = self.start_model_evaluation(model_eval_config=self.model_evaluation_config,
+                                                                        data_transformation_artifact=data_transformation_artifact,
+                                                                        model_trainer_artifact=model_trainer_artifact)
+                if not model_evaluation_artifact.is_model_accepted:
+                    logging.info(f"Model not accepted.")
+                    return None
+                model_pusher_artifact = self.start_model_pusher(model_evaluation_artifact=model_evaluation_artifact)
+                
+                mlflow.set_tag("pipeline_status", "completed")
             
         except Exception as e:
+            mlflow.set_tag("pipeline_status", "failed")
             raise MyException(e, sys)
