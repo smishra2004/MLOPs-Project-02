@@ -57,4 +57,12 @@ logging.getLogger("PIL").propagate = False
 logging.getLogger("PIL").setLevel(logging.CRITICAL)
 logging.getLogger("pydot").disabled = True
 logging.getLogger("pydot.core").disabled = True
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
+logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("dagshub").setLevel(logging.WARNING)
+logging.getLogger("git").setLevel(logging.WARNING)
+logging.getLogger("git.cmd").setLevel(logging.WARNING)
+logging.getLogger("git.util").setLevel(logging.WARNING)
     

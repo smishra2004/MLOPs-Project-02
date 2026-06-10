@@ -16,3 +16,6 @@ S3_MODEL_KEY_PATH = "cnn_model.pkl"
 
 PIPELINE_NAME: str = ""
 ARTIFACT_DIR: str = "artifacts"
+
+DAGSHUB_USERNAME = "smishra2004"
+DAGSHUB_REPO_NAME = "MLOPs-Project-02"
