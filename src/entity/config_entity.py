@@ -21,28 +21,6 @@ class TrainingPipelineConfig:
 
 training_pipeline_config: TrainingPipelineConfig = TrainingPipelineConfig()
  
-# @dataclass
-# class DataIngestionConfig:
-#     """
-#     What the data ingestion component NEEDS (inputs / settings).
-#     """
-#     # Where the downloaded zip will be saved locally
-#     local_zip_file_path: str = os.path.join(
-#         ARTIFACT_DIR, "data_ingestion", "raw", "chest_xray.zip"
-#     )
- 
-#     # Root directory where the zip is extracted
-#     # Final on-disk layout after extraction:
-#     #   raw_data_dir/
-#     #       train/NORMAL/*.jpeg
-#     #       train/PNEUMONIA/*.jpeg
-#     #       test/NORMAL/*.jpeg
-#     #       test/PNEUMONIA/*.jpeg
-#     #       val/NORMAL/*.jpeg
-#     #       val/PNEUMONIA/*.jpeg
-#     raw_data_dir: str = os.path.join(
-#         ARTIFACT_DIR, "data_ingestion", "raw", "chest_xray"
-#     )
 
 @dataclass
 class DataIngestionConfig:
@@ -79,7 +57,7 @@ from src.constants import ARTIFACT_DIR
 class ModelTrainerConfig:
     """What the model trainer component NEEDS."""
  
-    num_epochs:      int   = 1      # increase if you move to GPU later
+    num_epochs:      int   = 15      # increase if you move to GPU later
     learning_rate:   float = 1e-4   # Adam LR — 1e-4 is standard for fine-tuning
     patience:        int   = 3      # early stopping: stop after 3 non-improving epochs
  
