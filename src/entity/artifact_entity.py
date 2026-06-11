@@ -32,8 +32,6 @@ class ModelTrainerArtifact:
     """What the model trainer component PRODUCES (feeds into ModelEvaluator)."""
  
     model_save_path: str    # path to saved resnet50_best.pth
-    test_accuracy:   float  # accuracy on test set after training
-    test_loss:       float  # loss on test set after training
     history:         Any    # dict → train_loss, train_acc, val_loss, val_acc per epoch
     
 
