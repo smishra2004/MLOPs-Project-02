@@ -1,10 +1,7 @@
 import os
 import sys
-import tempfile
 
 import mlflow
-import mlflow.pytorch
-import dagshub
 import torch
 import torch.nn as nn
 import numpy as np
@@ -31,41 +28,42 @@ from src.entity.artifact_entity import (
 from src.entity.chest_xray_s3_estimator import ChestXrayEstimator
 from src.exception import MyException
 from src.logger import logging
-from src.constants import DAGSHUB_USERNAME, DAGSHUB_REPO_NAME
 
 
 @dataclass
 class EvaluateModelResponse:
     """
-    Full metrics comparison between newly trained model
-    and the current production model in S3.
+    Holds the full comparison between newly trained model
+    and current production model in S3.
     """
-    # newly trained model metrics
     trained_model_auc       : float
     trained_model_accuracy  : float
     trained_model_loss      : float
     trained_model_precision : float
     trained_model_recall    : float
     trained_model_f1        : float
-
-    # production model metrics (all 0.0 if no production model exists)
-    best_model_auc          : float
-    best_model_accuracy     : float
-
-    # decision
+    best_model_auc          : float   # 0.0 if no production model exists yet
+    best_model_accuracy     : float   # 0.0 if no production model exists yet
     is_model_accepted       : bool
-    difference              : float     # trained_auc - best_auc
+    difference              : float   # trained_auc - best_auc
 
 
 class ModelEvaluation:
     """
-    Evaluates the trained model against the production model in S3.
-    Logs ALL metrics to MLflow / DagsHub.
+    Single responsibility: EVALUATE the trained model on the test set
+    and decide whether it beats the current production model.
 
-    MLflow run lifecycle:
-        ModelEvaluation OPENS  the run  → mlflow.start_run()
-        ModelEvaluation CLOSES the run  → mlflow.end_run()
-    ModelTrainer only logs inside an already-open run (no start/end there).
+    What this file does:
+        - loads saved .pth from ModelTrainerArtifact
+        - runs on test_loader ONCE to compute all metrics
+        - checks S3 for production model and compares AUC
+        - logs all metrics + confusion matrix to MLflow/DagsHub
+        - returns ModelEvaluationArtifact with acceptance decision
+
+    What this file does NOT do:
+        - never trains anything
+        - never touches train_loader or val_loader
+        - never opens/closes MLflow run (that is training_pipeline.py's job)
     """
 
     def __init__(
@@ -83,31 +81,10 @@ class ModelEvaluation:
             raise MyException(e, sys)
 
     # ──────────────────────────────────────────────────────────────────────────
-    def _setup_mlflow(self) -> None:
-        """
-        Connects MLflow to DagsHub as the remote tracking server.
-        Call once before mlflow.start_run().
-
-        Fill in your DagsHub credentials in constants/__init__.py:
-            DAGSHUB_USERNAME  = "your_dagshub_username"
-            DAGSHUB_REPO_NAME = "your_repo_name"
-        """
-        try:
-            dagshub.init(
-                repo_owner=DAGSHUB_USERNAME,
-                repo_name=DAGSHUB_REPO_NAME,
-                mlflow=True,
-            )
-            mlflow.set_experiment("ChestXray_ResNet50")
-            logging.info("MLflow connected to DagsHub successfully.")
-        except Exception as e:
-            raise MyException(e, sys)
-
-    # ──────────────────────────────────────────────────────────────────────────
     def _load_trained_model(self) -> nn.Module:
         """
-        Loads the locally saved ResNet50 from the ModelTrainer artifact path.
-        Rebuilds the same architecture used during training then pours in weights.
+        Loads the locally saved .pth file from ModelTrainerArtifact.
+        Rebuilds the same architecture used during training.
         """
         try:
             logging.info(
@@ -130,16 +107,17 @@ class ModelEvaluation:
             )
             model = model.to(self.device)
             model.eval()
-            logging.info("Trained model loaded.")
+            logging.info("Trained model loaded successfully.")
             return model
+
         except Exception as e:
             raise MyException(e, sys)
 
     # ──────────────────────────────────────────────────────────────────────────
     def get_best_model(self) -> Optional[ChestXrayEstimator]:
         """
-        Fetches the current production model from S3 if it exists.
-        Returns None on first deployment.
+        Checks S3 for a production model.
+        Returns ChestXrayEstimator if found, None on first deployment.
         """
         try:
             estimator = ChestXrayEstimator(
@@ -151,35 +129,29 @@ class ModelEvaluation:
             ):
                 logging.info("Production model found in S3.")
                 return estimator
-            logging.info("No production model found in S3 — first deployment.")
+            logging.info("No production model in S3 — first deployment.")
             return None
+
         except Exception as e:
             raise MyException(e, sys)
 
     # ──────────────────────────────────────────────────────────────────────────
     def _compute_all_metrics(
         self,
-        model    : nn.Module,
-        loader   : torch.utils.data.DataLoader,
+        model : nn.Module,
     ) -> dict:
         """
-        Computes the full set of evaluation metrics for a given model.
+        Runs model on test_loader and computes all metrics.
+        This is the ONLY place test_loader is used in the entire pipeline.
 
-        Metrics computed:
-            loss      : weighted CrossEntropyLoss (same as training)
-            accuracy  : fraction of correct predictions
-            auc       : ROC-AUC score (main comparison metric)
-            precision : of all predicted PNEUMONIA, how many were correct
-            recall    : of all actual PNEUMONIA, how many did we catch
-                        (most important for medical — missing pneumonia = bad)
+        Metrics:
+            loss      : weighted CrossEntropyLoss
+            accuracy  : correct / total
+            auc       : ROC-AUC (main comparison metric — threshold independent)
+            precision : of predicted PNEUMONIA, how many were actually PNEUMONIA
+            recall    : of actual PNEUMONIA, how many did we correctly catch
+                        ← most critical metric for medical diagnosis
             f1        : harmonic mean of precision and recall
-
-        Args:
-            model  : PyTorch model in eval mode.
-            loader : DataLoader (test set).
-
-        Returns:
-            dict of all metric values.
         """
         try:
             model.eval()
@@ -191,10 +163,10 @@ class ModelEvaluation:
             total        = 0
             all_preds    = []
             all_labels   = []
-            all_probs    = []   # P(PNEUMONIA) for AUC
+            all_probs    = []   # P(PNEUMONIA) — needed for AUC
 
             with torch.no_grad():
-                for images, labels in loader:
+                for images, labels in self.data_transformation_artifact.test_loader:
                     images  = images.to(self.device)
                     labels  = labels.to(self.device)
                     outputs = model(images)
@@ -203,29 +175,26 @@ class ModelEvaluation:
                     running_loss += loss.item() * images.size(0)
                     total        += labels.size(0)
 
-                    probs        = torch.softmax(outputs, dim=1)[:, 1]
-                    _, preds     = torch.max(outputs, dim=1)
+                    probs    = torch.softmax(outputs, dim=1)[:, 1]
+                    _, preds = torch.max(outputs, dim=1)
 
                     all_preds.extend(preds.cpu().numpy())
                     all_labels.extend(labels.cpu().numpy())
                     all_probs.extend(probs.cpu().numpy())
 
             metrics = {
-                "loss"      : round(running_loss / total,                              4),
-                "accuracy"  : round(accuracy_score(all_labels, all_preds),             4),
-                "auc"       : round(roc_auc_score(all_labels, all_probs),              4),
+                "loss"      : round(running_loss / total,                          4),
+                "accuracy"  : round(accuracy_score(all_labels, all_preds),         4),
+                "auc"       : round(roc_auc_score(all_labels, all_probs),          4),
                 "precision" : round(precision_score(all_labels, all_preds,
-                                    zero_division=0),                                  4),
+                                    zero_division=0),                              4),
                 "recall"    : round(recall_score(all_labels, all_preds,
-                                    zero_division=0),                                  4),
+                                    zero_division=0),                              4),
                 "f1"        : round(f1_score(all_labels, all_preds,
-                                    zero_division=0),                                  4),
+                                    zero_division=0),                              4),
+                "_preds"    : all_preds,
+                "_labels"   : all_labels,
             }
-
-            # Store raw arrays for confusion matrix + classification report
-            metrics['_preds']  = all_preds
-            metrics['_labels'] = all_labels
-
             return metrics
 
         except Exception as e:
@@ -234,8 +203,8 @@ class ModelEvaluation:
     # ──────────────────────────────────────────────────────────────────────────
     def _save_confusion_matrix(self, preds: list, labels: list) -> str:
         """
-        Saves a confusion matrix plot as a PNG and returns the file path.
-        We log this image to MLflow as an artifact.
+        Saves confusion matrix as PNG and returns path.
+        Logged to MLflow as an artifact so it appears on DagsHub.
         """
         try:
             cm  = confusion_matrix(labels, preds)
@@ -275,25 +244,25 @@ class ModelEvaluation:
     # ──────────────────────────────────────────────────────────────────────────
     def evaluate_model(self) -> EvaluateModelResponse:
         """
-        Core evaluation logic:
-          1. Compute full metrics for trained model on test set
-          2. Check if production model exists in S3
-          3. If yes → compute metrics for production model too
-          4. Compare AUC to decide acceptance
-          5. Log everything to MLflow
+        Core evaluation logic — only thing this function does is evaluate.
 
-        Returns:
-            EvaluateModelResponse with all metrics + acceptance decision.
+        Steps:
+            1. Load trained model from local .pth
+            2. Run on test_loader → compute all metrics
+            3. Log trained model metrics to MLflow
+            4. Log training history summary to MLflow
+            5. Save + log confusion matrix
+            6. Log model file as artifact
+            7. Check S3 for production model
+            8. If found → evaluate it on same test set → compare AUC
+            9. Make acceptance decision
         """
         try:
-            logging.info("Starting model evaluation.")
+            logging.info("Starting model evaluation on test set.")
 
-            # ── Step 1: Compute trained model metrics ─────────────────────
+            # ── Step 1 + 2: Load trained model → compute metrics ──────────
             trained_model   = self._load_trained_model()
-            trained_metrics = self._compute_all_metrics(
-                model=trained_model,
-                loader=self.data_transformation_artifact.test_loader,
-            )
+            trained_metrics = self._compute_all_metrics(model=trained_model)
 
             logging.info(
                 f"Trained model metrics — "
@@ -312,7 +281,7 @@ class ModelEvaluation:
                 )
             )
 
-            # ── Step 2: Log trained model metrics to MLflow ───────────────
+            # ── Step 3: Log test metrics to MLflow ────────────────────────
             mlflow.log_metrics({
                 "test_loss"      : trained_metrics['loss'],
                 "test_accuracy"  : trained_metrics['accuracy'],
@@ -322,9 +291,7 @@ class ModelEvaluation:
                 "test_f1"        : trained_metrics['f1'],
             })
 
-            # ── Step 3: Log training history metrics from ModelTrainer ─────
-            # These were logged per epoch in model_trainer.py already
-            # We additionally log final epoch values as summary here
+            # ── Step 4: Log training history summary to MLflow ────────────
             history = self.model_trainer_artifact.history
             if history['train_loss']:
                 mlflow.log_metrics({
@@ -334,58 +301,51 @@ class ModelEvaluation:
                     "final_val_acc"    : round(history['val_acc'][-1],    4),
                 })
 
-            # ── Step 4: Log confusion matrix image to MLflow ──────────────
+            # ── Step 5: Save + log confusion matrix ───────────────────────
             cm_path = self._save_confusion_matrix(
                 preds=trained_metrics['_preds'],
                 labels=trained_metrics['_labels'],
             )
             mlflow.log_artifact(cm_path, artifact_path="evaluation_plots")
 
-            # ── Step 5: Log the model file itself to MLflow ───────────────
+            # ── Step 6: Log model file to MLflow ──────────────────────────
             mlflow.log_artifact(
                 self.model_trainer_artifact.model_save_path,
                 artifact_path="model"
             )
 
-            # ── Step 6: Check production model ────────────────────────────
+            # ── Step 7 + 8: Check production model in S3 ──────────────────
             best_model_auc      = 0.0
             best_model_accuracy = 0.0
             best_model          = self.get_best_model()
 
             if best_model is not None:
-                logging.info("Computing metrics for production model from S3.")
-                production_model    = best_model.load_model()
-                production_metrics  = self._compute_all_metrics(
-                    model=production_model,
-                    loader=self.data_transformation_artifact.test_loader,
-                )
-                best_model_auc      = production_metrics['auc']
-                best_model_accuracy = production_metrics['accuracy']
+                logging.info("Evaluating production model from S3 on test set.")
+                production_model   = best_model.load_model()
+                production_metrics = self._compute_all_metrics(model=production_model)
+                best_model_auc     = production_metrics['auc']
+                best_model_accuracy= production_metrics['accuracy']
 
                 logging.info(
-                    f"Production model metrics — "
-                    f"AUC: {best_model_auc}  "
-                    f"Acc: {best_model_accuracy}"
+                    f"Production model — "
+                    f"AUC: {best_model_auc}  Acc: {best_model_accuracy}"
                 )
-
-                # Log production model metrics for comparison
                 mlflow.log_metrics({
                     "production_model_auc"      : best_model_auc,
                     "production_model_accuracy" : best_model_accuracy,
                 })
             else:
                 logging.info(
-                    "No production model in S3 — "
-                    "trained model accepted by default."
+                    "No production model in S3 — trained model accepted by default."
                 )
 
-            # ── Step 7: Acceptance decision ───────────────────────────────
+            # ── Step 9: Acceptance decision ───────────────────────────────
             is_model_accepted = trained_metrics['auc'] > best_model_auc
             difference        = trained_metrics['auc'] - best_model_auc
 
             mlflow.log_metrics({
-                "auc_improvement"  : round(difference, 4),
-                "model_accepted"   : int(is_model_accepted),   # 1=yes, 0=no
+                "auc_improvement" : round(difference, 4),
+                "model_accepted"  : int(is_model_accepted),
             })
 
             result = EvaluateModelResponse(
@@ -410,38 +370,24 @@ class ModelEvaluation:
     # ──────────────────────────────────────────────────────────────────────────
     def initiate_model_evaluation(self) -> ModelEvaluationArtifact:
         """
-        Entry point for the model evaluation component.
-        Opens AND closes the MLflow run here.
-        ModelTrainer only logs metrics inside the already-open run.
+        Entry point. Calls evaluate_model() and packages the artifact.
+        MLflow run is already open from training_pipeline.py — no start/end here.
         """
         try:
             logging.info(
                 "========== Entered initiate_model_evaluation — ModelEvaluation =========="
             )
 
-            # ── Connect to DagsHub ────────────────────────────────────────
-            
-
-            # ── Open MLflow run ───────────────────────────────────────────
-            # Everything logged in ModelTrainer + ModelEvaluation
-            # goes into this single run
-            
-
             evaluate_model_response = self.evaluate_model()
 
             model_evaluation_artifact = ModelEvaluationArtifact(
-                    is_model_accepted  = evaluate_model_response.is_model_accepted,
-                    s3_model_path      = self.model_eval_config.s3_model_key_path,
-                    trained_model_path = self.model_trainer_artifact.model_save_path,
-                    changed_accuracy   = evaluate_model_response.difference,
+                is_model_accepted  = evaluate_model_response.is_model_accepted,
+                s3_model_path      = self.model_eval_config.s3_model_key_path,
+                trained_model_path = self.model_trainer_artifact.model_save_path,
+                changed_accuracy   = evaluate_model_response.difference,
             )
 
-            logging.info(
-                    f"Model evaluation artifact: {model_evaluation_artifact}"
-            )
-
-            # run closes here — all metrics are now on DagsHub
-            logging.info("MLflow run closed. All metrics logged to DagsHub.")
+            logging.info(f"Model evaluation artifact: {model_evaluation_artifact}")
             logging.info(
                 "========== Exited initiate_model_evaluation — ModelEvaluation =========="
             )
