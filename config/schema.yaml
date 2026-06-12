@@ -1,0 +1,111 @@
+# ============================================================
+# schema.yaml — Chest X-Ray Dataset Validation Schema
+# ============================================================
+# Used by a DataValidation component to verify the extracted
+# dataset structure before transformation and training begin.
+#
+# If any check fails → pipeline raises an exception early
+# rather than silently training on corrupt/incomplete data.
+# ============================================================
+
+
+# ── Dataset Identity ─────────────────────────────────────────
+dataset:
+  name: "Chest X-Ray Pneumonia Detection"
+  source: "AWS S3"
+  task: "Binary Image Classification"
+  classes:
+    - NORMAL
+    - PNEUMONIA
+  num_classes: 2
+
+
+# ── Expected Folder Structure ────────────────────────────────
+# After extraction the dataset must have exactly these splits
+# each containing exactly these class subfolders
+structure:
+  splits:
+    - train
+    - test
+    - val
+  class_folders:
+    - NORMAL
+    - PNEUMONIA
+
+
+# ── Minimum Image Counts Per Split ───────────────────────────
+# Pipeline raises exception if any split falls below these.
+# Values are set conservatively below actual counts
+# (actual: train=5216, test=624, val=16)
+# so minor corruption is caught without being too strict.
+min_image_counts:
+  train:
+    NORMAL    : 1000
+    PNEUMONIA : 3000
+    total     : 4000
+  test:
+    NORMAL    : 200
+    PNEUMONIA : 300
+    total     : 500
+  val:
+    NORMAL    : 5
+    PNEUMONIA : 5
+    total     : 10
+
+
+# ── Class Imbalance Threshold ─────────────────────────────────
+# Warn if imbalance ratio (majority/minority) exceeds this.
+# EDA found 2.89x — we warn above 4x which signals data issue.
+imbalance:
+  max_ratio_warning  : 4.0     # log WARNING if exceeded
+  max_ratio_error    : 8.0     # raise exception if exceeded
+
+
+# ── Allowed File Extensions ───────────────────────────────────
+# Only these extensions are treated as valid images.
+# Any other file type in the class folders is flagged.
+allowed_extensions:
+  - .jpeg
+  - .jpg
+  - .png
+
+
+# ── Image Property Validation ─────────────────────────────────
+# Sampled on up to `sample_size` images per split to keep
+# validation fast on CPU. Full scan would take too long.
+image_validation:
+  sample_size       : 100       # images sampled per split for checks
+
+  # Images must be convertible to RGB
+  # (some X-rays are saved as grayscale — we convert but flag if all are)
+  require_rgb       : false     # false = allow grayscale, we convert in transforms
+
+  # Minimum dimensions — images smaller than this are likely corrupt
+  min_width         : 100       # pixels
+  min_height        : 100       # pixels
+
+  # Maximum dimensions — sanity check for obviously wrong files
+  max_width         : 5000      # pixels
+  max_height        : 5000      # pixels
+
+  # Target size after transformation (for reference — not validated here)
+  target_width      : 224
+  target_height     : 224
+
+
+# ── Corruption Check ──────────────────────────────────────────
+# PIL verify() is run on all images.
+# EDA found 0 corrupted images — any found here are flagged.
+corruption:
+  run_full_scan       : true    # scan every image, not just sample
+  max_corrupted_allowed: 0      # raise exception if any corrupted found
+                                # set to small number e.g. 5 to allow minor issues
+
+
+# ── Split Ratio Validation ────────────────────────────────────
+# Sanity check that test and val are not larger than train.
+# Prevents accidentally swapped splits.
+split_ratios:
+  min_train_fraction : 0.70    # train must be at least 70% of total images
+  max_test_fraction  : 0.20    # test must not exceed 20% of total
+  max_val_fraction   : 0.05    # val must not exceed 5% of total
